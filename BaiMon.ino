@@ -1,5 +1,7 @@
-// BaiMon - Vaillant TurboTec family boiler monitor
 //
+// BaiMon - Vaillant TurboTec family boiler monitor
+// Origin @slavikb
+// Added Alexey Maslyukov <mao50mao@gmail.com>
 //
 
 #include "esp8266_peri.h"
@@ -18,12 +20,11 @@ extern "C" {
 /////////////////////////////////////////////////////////////
 // Defines
 
-#define BAIMON_VERSION "1.3"
+#define BAIMON_VERSION "2.0"
 
 #define EBUS_SLAVE_ADDR(MASTER) ((MASTER)+5)
 
-enum // EBus addresses
-{
+enum { // EBus addresses
   EBUS_ADDR_HOST   = CONFIG_EBUS_ADDR_HOST,
   EBUS_ADDR_BOILER = EBUS_SLAVE_ADDR(CONFIG_EBUS_ADDR_BOILER),
 };
@@ -54,8 +55,7 @@ enum // EBus addresses
 /////////////////////////////////////////////////////////////
 // WiFi
 
-void SetupWifi()
-{
+void SetupWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(CONFIG_WIFI_SSID, CONFIG_WIFI_PASS);
 }
@@ -63,10 +63,8 @@ void SetupWifi()
 /////////////////////////////////////////////////////////////
 // EBus utilites
 
-uint8 ICACHE_RAM_ATTR Crc8Byte(uint8 data, uint8 crc)
-{
-   for (unsigned int i = 0; i < 8; i++)
-   {
+uint8 ICACHE_RAM_ATTR Crc8Byte(uint8 data, uint8 crc) {
+   for (unsigned int i = 0; i < 8; i++) {
       const uint8 polynom = (crc & 0x80) ? 0x9B : 0;
 
       crc <<= 1;
@@ -79,8 +77,7 @@ uint8 ICACHE_RAM_ATTR Crc8Byte(uint8 data, uint8 crc)
    return crc;
 }
 
-uint8 ICACHE_RAM_ATTR Crc8Buf(const void *buf, uint32 len)
-{
+uint8 ICACHE_RAM_ATTR Crc8Buf(const void *buf, uint32 len) {
   uint8 crc = 0;
   const uint8 *p = (const uint8 *)buf;
   for (; len != 0; --len)
@@ -93,15 +90,13 @@ uint8 ICACHE_RAM_ATTR Crc8Buf(const void *buf, uint32 len)
 
 #define UART_EBUS UART0
 
-enum // special receive statuses
-{
+enum { // special receive statuses
   RecvTimeout = -1,  // timeout
   RecvError   = -2,  // framing error
   RecvUnknown = -3   // unexpected interrupt
 };
 
-enum
-{
+enum {
   // Max number of retries for failed command (bus collision or other error)
   CMD_MAX_RETRIES = 2,
   // Number of skipped SYN before retries
@@ -133,8 +128,7 @@ volatile uint32 g_nonSyncData = 0;   // flag: non-sync data was received
 #define INVALID_TEMPERATURE_VALUE  ((short)0x8000)
 #define INVALID_PRESSURE_VALUE  ((unsigned short)0xFFFF)
 
-struct EBusCommand
-{
+struct EBusCommand {
   EBusCommand * m_next_cmd;
   uint32 m_byteIndex;      // start byte# (to find position in buffer)
   uint8  m_reqData[14];  // request raw bytes
@@ -146,8 +140,7 @@ struct EBusCommand
   uint8  m_respCrc;      // running CRC of reply bytes
   uint8  m_retryCount;      // retry number (0 - first)
 
-  enum
-  {
+  enum {
     CmdInit    = 0,  // init state
     ReqSend    = 1,  // sending request bytes (init state)
     ReqWaitAck = 2,  // waiting for ACK for request
@@ -160,13 +153,11 @@ struct EBusCommand
     CmdError   = 9,  // final error state
   };
 
-  EBusCommand() : m_next_cmd(0)
-  {
+  EBusCommand() : m_next_cmd(0) {
     Clear();
   }
 
-  void Clear()
-  {
+  void Clear() {
     m_byteIndex = 0;
     m_state = CmdInit;
     m_reqSize = 0;
@@ -177,34 +168,28 @@ struct EBusCommand
   }
 
   // put request byte
-  void ReqPut(uint8 b)
-  {
+  void ReqPut(uint8 b) {
     if (m_reqSize > sizeof(m_reqData)-2)
       return;
-    if (b == 0xAA || b == 0xA9)
-    {
+    if (b == 0xAA || b == 0xA9) {
       m_reqData[m_reqSize++] = 0xA9;
       m_reqData[m_reqSize++] = (b == 0xA9) ? 0 : 1;
     }
-    else
-    {
+    else {
       m_reqData[m_reqSize++] = b;
     }
   }
 
-  void ReqFinish()
-  {
+  void ReqFinish() {
     ReqPut(Crc8Buf(m_reqData,m_reqSize));
   }
 
-  bool IsSuccess() const
-  {
+  bool IsSuccess() const {
     return m_state == CmdSuccess;
   }
 
   // Prepare GetParm command (B5 09 03 0D ADDR_LO ADDR_HI)
-  void PrepGetParm(unsigned int addrFrom, unsigned int addrTo, unsigned int parmNo, unsigned int respLen)
-  {
+  void PrepGetParm(unsigned int addrFrom, unsigned int addrTo, unsigned int parmNo, unsigned int respLen) {
     Clear();
     ReqPut(addrFrom);
     ReqPut(addrTo);
@@ -218,38 +203,32 @@ struct EBusCommand
     m_respLen = respLen;
   }
 
-  void PrepGetState(unsigned int addrFrom, unsigned int addrTo)
-  {
+  void PrepGetState(unsigned int addrFrom, unsigned int addrTo) {
     PrepGetParm(addrFrom, addrTo, 0xAB, 1);
   }
 
-  unsigned int GetStateValue() const
-  {
+  unsigned int GetStateValue() const {
     if (! IsSuccess())
       return INVALID_STATE_VALUE;
     return m_respData[0];
   }
 
-  void PrepGetTemperature(unsigned int addrFrom, unsigned int addrTo)
-  {
+  void PrepGetTemperature(unsigned int addrFrom, unsigned int addrTo) {
     PrepGetParm(addrFrom, addrTo, 0x18, 3);
   }
 
   // returns temperature (in 1/16 C)
-  short GetTemperatureValue() const
-  {
+  short GetTemperatureValue() const {
     if (! IsSuccess())
       return INVALID_TEMPERATURE_VALUE;
     return (short)((unsigned int)m_respData[1] << 8 | m_respData[0]);
   }
 
-  void PrepGetPressure(unsigned int addrFrom, unsigned int addrTo)
-  {
+  void PrepGetPressure(unsigned int addrFrom, unsigned int addrTo) {
     PrepGetParm(addrFrom, addrTo, 0x02, 3);
   }
 
-  unsigned short GetPressureValue() const
-  {
+  unsigned short GetPressureValue() const {
     if (! IsSuccess())
       return INVALID_PRESSURE_VALUE;
     return (unsigned short)((unsigned int)m_respData[1] << 8 | m_respData[0]);
@@ -258,10 +237,8 @@ struct EBusCommand
 
 volatile EBusCommand * g_activeCommand = 0;
 
-bool ICACHE_RAM_ATTR RetryOrFail(volatile EBusCommand *cmd)
-{
-  if (cmd->m_retryCount >= CMD_MAX_RETRIES)
-  {
+bool ICACHE_RAM_ATTR RetryOrFail(volatile EBusCommand *cmd) {
+  if (cmd->m_retryCount >= CMD_MAX_RETRIES) {
     cmd->m_state = EBusCommand::CmdError;
     g_activeCommand = cmd->m_next_cmd;
     return false;
@@ -278,32 +255,21 @@ bool ICACHE_RAM_ATTR RetryOrFail(volatile EBusCommand *cmd)
 }
 
 // Send byte to EBus
-void ICACHE_RAM_ATTR SendChar(uint8 ch)
-{
+void ICACHE_RAM_ATTR SendChar(uint8 ch) {
   while((USS(UART_EBUS) >> USTXC) >= 0x7f);
   USF(UART_EBUS) = ch;
-  //WRITE_PERI_REG(UART_FIFO(UART_EBUS), ch);
-  
-  // Rom SDK function
-	// uart_tx_one_char(ch);
-	// Flush
-	// uart_wait_tx_empty(UART_EBUS);
 }
 
-void ICACHE_RAM_ATTR ProcessReceive(int st)
-{
+void ICACHE_RAM_ATTR ProcessReceive(int st) {
   uint32 t = millis();
 
   volatile EBusCommand *cmd = g_activeCommand;
  
-  if (st < 0) // recv error
-  {
+  if (st < 0) { // recv error
     g_recvErrCnt++;
     g_nonSyncData++;
-    if (cmd != 0)
-    {
-      if (cmd->m_state != EBusCommand::CmdInit)
-      {
+    if (cmd != 0) {
+      if (cmd->m_state != EBusCommand::CmdInit) {
         RetryOrFail(cmd);
       }
     }
@@ -312,154 +278,124 @@ void ICACHE_RAM_ATTR ProcessReceive(int st)
  
   uint8 ch = (uint8)st;
   PUT_SERIAL_BYTE(ch);
-  if (ch == 0xAA)
-  {
+  if (ch == 0xAA) {
     if (g_nonSyncData == 0)
       g_lastSyncTime = t;
     g_nonSyncData = 0;
-  }
-  else
-  {
+  } else {
     g_nonSyncData++;
   }
     
   if (cmd == 0)
     return;
 
-  switch(cmd->m_state)
-  {
-  case EBusCommand::CmdInit:
-    if (ch != 0xAA) // not a sync char, skip
-      break;
-    // sync char received
-    if (cmd->m_count != 0)
-    {
-      // skip given (random) number of syncs before restart
-      cmd->m_count--;
-      break;
-    }
-    // start processing command
-    cmd->m_byteIndex = g_serialByteCount;
-    if (cmd->m_reqSize == 0)
-    {
-      RetryOrFail(cmd);
-      break;
-    }
-    else
-    {
-      cmd->m_state = EBusCommand::ReqSend;
-      cmd->m_count = 0;  // m_count is used as request byte counter
-      SendChar(cmd->m_reqData[0]);
-    }
-    break;
+  switch(cmd->m_state) {
+  	case EBusCommand::CmdInit:
+    	if (ch != 0xAA) // not a sync char, skip
+      		break;
+    	// sync char received
+    	if (cmd->m_count != 0) {
+      	// skip given (random) number of syncs before restart
+      		cmd->m_count--;
+      		break;
+    	}
+    	// start processing command
+    	cmd->m_byteIndex = g_serialByteCount;
+    	if (cmd->m_reqSize == 0) {
+      		RetryOrFail(cmd);
+      		break;
+    	} else {
+      		cmd->m_state = EBusCommand::ReqSend;
+      		cmd->m_count = 0;  // m_count is used as request byte counter
+      		SendChar(cmd->m_reqData[0]);
+    	}
+    	break;
 
-  case EBusCommand::ReqSend:
-    if (cmd->m_count >= cmd->m_reqSize)
-    {
-      RetryOrFail(cmd);
-      break;
-    }
-    if (cmd->m_reqData[cmd->m_count] != ch)
-    {
-      RetryOrFail(cmd);
-      break;
-    }
-    cmd->m_count++;
-    if (cmd->m_count == cmd->m_reqSize)
-      cmd->m_state = EBusCommand::ReqWaitAck;
-    else
-      SendChar(cmd->m_reqData[cmd->m_count]);
-    break;
+  	case EBusCommand::ReqSend:
+    	if (cmd->m_count >= cmd->m_reqSize) {
+      		RetryOrFail(cmd);
+      		break;
+    	}
+    	if (cmd->m_reqData[cmd->m_count] != ch) {
+      		RetryOrFail(cmd);
+      		break;
+    	}
+    	cmd->m_count++;
+    	if (cmd->m_count == cmd->m_reqSize)
+      		cmd->m_state = EBusCommand::ReqWaitAck;
+    	else
+      		SendChar(cmd->m_reqData[cmd->m_count]);
+    	break;
 
-  case EBusCommand::ReqWaitAck:
-    if (ch == 0) // ACK
-    {
-      cmd->m_state = EBusCommand::RspStart;
-    }
-    else
-    {
-      RetryOrFail(cmd);
-    }
-    break;
+  	case EBusCommand::ReqWaitAck:
+    	if (ch == 0) { // ACK
+      		cmd->m_state = EBusCommand::RspStart;
+    	} else {
+      		RetryOrFail(cmd);
+    	}
+    	break;
 
-  case EBusCommand::RspStart: // receiving length (must match expected)
-    if (ch == cmd->m_respLen)
-    {
-      cmd->m_respCrc = Crc8Byte(ch, 0);
-      cmd->m_state = EBusCommand::RspData;
-      cmd->m_count = 0;  // m_count used as response decoded byte counter
-    }
-    else
-    {
-      RetryOrFail(cmd);
-    }
-    break;
+  	case EBusCommand::RspStart: // receiving length (must match expected)
+    	if (ch == cmd->m_respLen) {
+      		cmd->m_respCrc = Crc8Byte(ch, 0);
+      		cmd->m_state = EBusCommand::RspData;
+      		cmd->m_count = 0;  // m_count used as response decoded byte counter
+    	} else {
+      		RetryOrFail(cmd);
+    	}
+    	break;
 
-  case EBusCommand::RspData:
-  case EBusCommand::RspEsc:
-    if (cmd->m_count < cmd->m_respLen)  // excluding CRC byte(s)
-      cmd->m_respCrc = Crc8Byte(ch, cmd->m_respCrc);
+  	case EBusCommand::RspData:
+  	case EBusCommand::RspEsc:
+    	if (cmd->m_count < cmd->m_respLen)  // excluding CRC byte(s)
+      		cmd->m_respCrc = Crc8Byte(ch, cmd->m_respCrc);
 
-    if (cmd->m_state == EBusCommand::RspData)
-    {
-      if (ch == 0xA9)
-      {
-        cmd->m_state = EBusCommand::RspEsc;
-        break;
-      }
-    }
-    else
-    {
-      if (ch == 0x00)
-      {
-          ch = 0xA9;
-      }
-      else if (ch == 0x01)
-      {
-          ch = 0xAA;
-      }
-      else
-      {
-        RetryOrFail(cmd);
-        break;
-      }
-      cmd->m_state = EBusCommand::RspData;
-    }
-    if (cmd->m_count == cmd->m_respLen)
-    {
-      // check CRC
-      if (ch == cmd->m_respCrc)
-      {
-        cmd->m_state = EBusCommand::RspAck;
-        SendChar(0x00); // send ACK
-      }
-      else
-      {
-        cmd->m_state = EBusCommand::RspNak;
-        SendChar(0xFF); // send NAK
-      }
-      break;
-    }
-    cmd->m_respData[cmd->m_count] = ch;
-    cmd->m_count++;
-    break;
+    	if (cmd->m_state == EBusCommand::RspData) {
+      		if (ch == 0xA9) {
+        		cmd->m_state = EBusCommand::RspEsc;
+        		break;
+      		}
+    	} else {
+      		if (ch == 0x00) {
+          		ch = 0xA9;
+      		} else if (ch == 0x01) {
+          		ch = 0xAA;
+      		} else {
+        		RetryOrFail(cmd);
+        		break;
+      		}
+      		cmd->m_state = EBusCommand::RspData;
+    	}
+    	if (cmd->m_count == cmd->m_respLen) {
+      		// check CRC
+      		if (ch == cmd->m_respCrc) {
+        		cmd->m_state = EBusCommand::RspAck;
+        		SendChar(0x00); // send ACK
+      		} else {
+        		cmd->m_state = EBusCommand::RspNak;
+        		SendChar(0xFF); // send NAK
+      		}
+      		break;
+    	}
+    	cmd->m_respData[cmd->m_count] = ch;
+    	cmd->m_count++;
+    	break;
 
-  case EBusCommand::RspAck:
-    if (ch == 0x00)
-    {
-      g_activeCommand->m_state = EBusCommand::CmdSuccess;
-      g_activeCommand = g_activeCommand->m_next_cmd;
-      SendChar(0xAA); // send sync
-      break;
-    }
-    // fall-through
-  case EBusCommand::RspNak:
-    RetryOrFail(cmd);
-    break;
+  	case EBusCommand::RspAck:
+    	if (ch == 0x00) {
+      		g_activeCommand->m_state = EBusCommand::CmdSuccess;
+      		g_activeCommand = g_activeCommand->m_next_cmd;
+      		SendChar(0xAA); // send sync
+      		break;
+    	}
+    	// fall-through
+  	case EBusCommand::RspNak:
+    	RetryOrFail(cmd);
+    	break;
 
-  default:
-    g_activeCommand->m_state = EBusCommand::CmdError;
-    break;
+  	default:
+    	g_activeCommand->m_state = EBusCommand::CmdError;
+    	break;
   }
 }
 
@@ -468,8 +404,7 @@ void ICACHE_RAM_ATTR ProcessReceive(int st)
 
 #define CHECK_INT_STATUS(ST, MASK) (((ST) & (MASK)) == (MASK))
 
-void ICACHE_RAM_ATTR uart_int_handler(void *va)
-{
+void ICACHE_RAM_ATTR uart_int_handler(void *va) {
     uint8 RcvChar;
 
     if (UART_RXFIFO_FULL_INT_ST != (READ_PERI_REG(UART_INT_ST(UART_EBUS)) & UART_RXFIFO_FULL_INT_ST)) {
@@ -484,8 +419,8 @@ void ICACHE_RAM_ATTR uart_int_handler(void *va)
 	}
 }
 
-void SetupEBus()
-{
+void SetupEBus() {
+    //setup native serial
     ETS_UART_INTR_ATTACH(uart_int_handler,  NULL);
     PIN_PULLUP_DIS(PERIPHS_IO_MUX_U0TXD_U);
     PIN_FUNC_SELECT(PERIPHS_IO_MUX_U0TXD_U, FUNC_U0TXD);
@@ -504,17 +439,12 @@ void SetupEBus()
     WRITE_PERI_REG(UART_INT_CLR(UART_EBUS), 0xffff);
     //enable rx_interrupt
     SET_PERI_REG_MASK(UART_INT_ENA(UART_EBUS), UART_RXFIFO_FULL_INT_ENA);
-
-
-  	//WRITE_PERI_REG(UART_INT_ENA(UART_EBUS), UART_RXFIFO_FULL_INT_ENA|UART_FRM_ERR_INT_ENA|UART_BRK_DET_INT_ENA);
-  	//ETS_UART_INTR_ENABLE();
 }
 
 /////////////////////////////////////////////////////////////
 // Periodic monitoring procedure
 
-struct ParmHistData
-{
+struct ParmHistData { 
   uint32 m_timeStamp;
   uint32 m_byteIndex;
   short  m_temperature;
@@ -533,16 +463,14 @@ struct ParmHistData
 // CMD_SUCC -> (cmd err) -> CMD_FAIL -> (cmd ok) -> CMD_SUCC
 // CMD_FAIL -> (no sync) -> NO_SYNC
 // 
-enum
-{
+enum {
   STATE_NO_SYNC    = 0,
   STATE_FIRST_POLL = 1,
   STATE_CMD_SUCC   = 2,
   STATE_CMD_FAIL   = 3
 };
 
-enum
-{
+enum {
   COMMAND_TIMEOUT  = 1000,  // command timeout (time to wait before declaring command failed)
   SYNC_TIMEOUT     = 2000,  // sync timeout (time to wait before entering NO_SYNC state)
 
@@ -561,8 +489,7 @@ uint32 g_failedCommandCount = 0; // number of last failed commands (must % FAILE
 uint8  g_failedCommandBytes[FAILED_COMMAND_BYTES_MAX * FAILED_COMMAND_HISTORY_SIZE];
 
 // Appends received data to last failed command data buffer (up to FAILED_COMMAND_BYTES_MAX)
-void SaveLastFailedCommandBytes()
-{
+void SaveLastFailedCommandBytes() {
   if (g_failedCommandCount == 0)
     return;
 
@@ -590,15 +517,13 @@ void SaveLastFailedCommandBytes()
     availBytes = FAILED_COMMAND_BYTES_MAX;
 
   uint8 *cmdBytes = g_failedCommandBytes + (cmdIdx * FAILED_COMMAND_BYTES_MAX);
-  while (cmd.m_savedBytes < availBytes)
-  {
+  while (cmd.m_savedBytes < availBytes) {
     cmdBytes[cmd.m_savedBytes] = g_serialBuffer[(byteIndex + cmd.m_savedBytes) % SERIAL_BUFFER_SIZE];
     cmd.m_savedBytes++;
   }
 }
 
-void SaveLastFailedCommand()
-{
+void SaveLastFailedCommand() {
   if (g_parmHistorySize == 0)
     return;
 
@@ -638,40 +563,34 @@ uint32 g_lastPressValue = 0;
 
 uint32 g_lastNarodMonTime = 0;
 
-void SetupMonitor()
-{
+void SetupMonitor() {
 }
 
-void ProcessMonitor()
-{
+void ProcessMonitor() {
   uint32 t = millis();
   bool needRequest = false;
 
   uint32 lastSyncTime = g_lastSyncTime;
   g_syncOk = (lastSyncTime != 0) && ((t - lastSyncTime) < SYNC_TIMEOUT);
 
-  switch(g_monitorState)
-  {
-  case STATE_NO_SYNC:
-    if (g_syncOk)
-    {
-      g_monitorState = STATE_FIRST_POLL;
-      g_firstPollTime = t;
-    }
-    break;
-  case STATE_FIRST_POLL:
-  case STATE_CMD_FAIL:
-    if (lastSyncTime != 0 && ! g_syncOk)
-      g_monitorState = STATE_NO_SYNC;
-    break;
-  default:
-    break;
+  switch(g_monitorState) {
+  	case STATE_NO_SYNC:
+    	if (g_syncOk) {
+      		g_monitorState = STATE_FIRST_POLL;
+      		g_firstPollTime = t;
+    	}
+    	break;
+  	case STATE_FIRST_POLL:
+  	case STATE_CMD_FAIL:
+    	if (lastSyncTime != 0 && ! g_syncOk)
+      		g_monitorState = STATE_NO_SYNC;
+    	break;
+  	default:
+    	break;
   }
 
-  if (g_monCmdActive)
-  {
-    if (g_activeCommand == 0 || t - g_lastMonitorTime > COMMAND_TIMEOUT)
-    {
+  if (g_monCmdActive) {
+    if (g_activeCommand == 0 || t - g_lastMonitorTime > COMMAND_TIMEOUT) {
       // stop active monitor command, if any
       if (g_activeCommand == &g_monGetState || g_activeCommand == &g_monGetTemp || g_activeCommand == &g_monGetPress)
         g_activeCommand = 0;
@@ -694,57 +613,46 @@ void ProcessMonitor()
       g_lastResultSent = false;
       g_lastState = parmData.m_state;
 
-      if (parmData.m_temperature != INVALID_TEMPERATURE_VALUE && parmData.m_pressure != INVALID_PRESSURE_VALUE)
-      {
+      if (parmData.m_temperature != INVALID_TEMPERATURE_VALUE && parmData.m_pressure != INVALID_PRESSURE_VALUE) {
         g_lastTempValue = parmData.m_temperature;
         g_lastPressValue = parmData.m_pressure;
         g_lastResultValid = true;
-      }
-      else
-      {
+      } else {
         g_lastResultValid = false;
       }
 
-      if (g_lastCmdSucceed)
-      {
+      if (g_lastCmdSucceed) {
         g_lastSuccessTime = g_lastMonitorTime;
         g_monitorState = STATE_CMD_SUCC;
-      }
-      else
-      {
+      } else {
         g_monitorState = g_syncOk ? STATE_CMD_FAIL : STATE_NO_SYNC;
         SaveLastFailedCommand();
       }
     }
-  }
-  else
-  {
-    switch(g_monitorState)
-    {
-    case STATE_FIRST_POLL:
-      if (t - g_firstPollTime > FIRST_POLL_DELAY)
-        needRequest = true;
-      break;
-    case STATE_CMD_SUCC:
-      if (t - g_lastMonitorTime > NORM_POLL_PERIOD)
-        needRequest = true;
-      break;
-    case STATE_CMD_FAIL:
-      if (t - g_lastMonitorTime > FAIL_POLL_PERIOD)
-        needRequest = true;
-      break;
-    default:
-      break;
+  } else {
+	switch(g_monitorState) {
+    	case STATE_FIRST_POLL:
+      		if (t - g_firstPollTime > FIRST_POLL_DELAY)
+        		needRequest = true;
+      		break;
+		case STATE_CMD_SUCC:
+      		if (t - g_lastMonitorTime > NORM_POLL_PERIOD)
+        		needRequest = true;
+      		break;
+    	case STATE_CMD_FAIL:
+      		if (t - g_lastMonitorTime > FAIL_POLL_PERIOD)
+        		needRequest = true;
+      		break;
+    	default:
+      		break;
     }
   }
 
   if (g_requestData)
     needRequest = true;
 
-  if (needRequest)
-  {
-    if (g_activeCommand == 0)
-    {
+  if (needRequest) {
+    if (g_activeCommand == 0) {
       g_lastMonitorTime = t;
       g_monCmdActive = true;
       g_requestData = false;
@@ -768,8 +676,7 @@ void ProcessMonitor()
 
 uint32 g_ledState = 0; // bit mask
 
-enum
-{
+enum {
   // Green LED [Power/WiFi]: On - connected, Blink - trying to connect
   GreenLed = 12,    // Wemos Mini: D6/MISO; Wemos D1: D12/MISO
   // Yellow LED [EBus sync]: On - EBus sync bytes (0xAA) detected, Off - not detected or mixed with garbage
@@ -778,27 +685,21 @@ enum
   RedLed = 14       // Wemos Mini: D5/SCK;  Wemos D1: D13/SCK
 };
 
-enum
-{
+enum {
   WIFI_BLINK_PERIOD = 100,    // Green LED - blink when trying to connect WiFi
   COMMAND_BLINK_PERIOD = 50,  // Red LED - blink during EBus command processing
 };
 
-bool GetLed(int no)
-{
+bool GetLed(int no) {
   return (g_ledState & (1 << no)) != 0;
 }
 
-void SetLed(int no, bool onoff)
-{
+void SetLed(int no, bool onoff) {
   const uint32 mask = 1 << no;
-  if (onoff)
-  {
+  if (onoff) {
     g_ledState |= mask;
     digitalWrite(no, LOW);
-  }
-  else
-  {
+  } else {
     g_ledState &= ~mask;
     digitalWrite(no, HIGH);
   }
@@ -806,18 +707,15 @@ void SetLed(int no, bool onoff)
 
 uint32 g_lastWifiBlinkTime = 0;
 
-void SetWifiLedOn()
-{
+void SetWifiLedOn() {
   if (! GetLed(GreenLed))
     SetLed(GreenLed, 1);
 }
 
-void SetWifiLedBlink()
-{
+void SetWifiLedBlink() {
     uint32 t = millis();
     uint32 dt = t - g_lastWifiBlinkTime;
-    if (dt > WIFI_BLINK_PERIOD)
-    {
+    if (dt > WIFI_BLINK_PERIOD) {
       SetLed(GreenLed, !GetLed(GreenLed));
       g_lastWifiBlinkTime = t;
     }
@@ -825,32 +723,27 @@ void SetWifiLedBlink()
 
 uint32 g_lastErrBlinkTime = 0;
 
-void SetErrLed(bool f)
-{
+void SetErrLed(bool f) {
   if (GetLed(RedLed) != f)
     SetLed(RedLed, f);
 }
 
-void SetErrLedBlink()
-{
+void SetErrLedBlink() {
     uint32 t = millis();
     uint32 dt = t - g_lastErrBlinkTime;
-    if (dt > COMMAND_BLINK_PERIOD)
-    {
+    if (dt > COMMAND_BLINK_PERIOD) {
       SetLed(RedLed, !GetLed(RedLed));
       g_lastErrBlinkTime = t;
     }
 }
 
-void SetupIndication()
-{
+void SetupIndication() {
   g_ledState = 0;
   pinMode(GreenLed, OUTPUT);
   pinMode(YellowLed, OUTPUT);
   pinMode(RedLed, OUTPUT);
   // Blink all LEDs 3 times on startup (indication test)
-  for (int i = 0; i < 3; ++i)
-  {
+  for (int i = 0; i < 3; ++i) {
     if (i != 0)
       delay(100);
     SetLed(GreenLed, true);
@@ -865,8 +758,7 @@ void SetupIndication()
   g_lastWifiBlinkTime = g_lastErrBlinkTime = millis();
 }
 
-void ProcessIndication()
-{
+void ProcessIndication() {
   uint32 t = millis();
 
   if (WiFi.status() == WL_CONNECTED)
@@ -887,11 +779,9 @@ void ProcessIndication()
 
 ESP8266WebServer g_webServer(80);
 
-void webResponseBegin(String& resp, int refresh)
-{
+void webResponseBegin(String& resp, int refresh) {
   resp.concat("<html><head>");
-  if (refresh != 0)
-  {
+  if (refresh != 0) {
       resp.concat("<meta http-equiv=\'refresh\' content=\'");
       resp.concat(refresh);
       resp.concat("\'/>");
@@ -902,13 +792,11 @@ void webResponseBegin(String& resp, int refresh)
     "</style></head><body>");
 }
 
-void webResponseEnd(String& resp)
-{
+void webResponseEnd(String& resp) {
   resp.concat("</body></html>");
 }
 
-void webHandleRoot()
-{
+void webHandleRoot() {
   uint32 t = millis();
 
   uint32 sec = t / 1000;
@@ -933,8 +821,7 @@ void webHandleRoot()
   resp.concat("</form>");
 
   resp.concat("<hr>Measurement history:<br><table border=\"0\"><tr><th>Time</th><th>State</th><th>Temperature,C</th><th>Pressure,Bar</th><th>Retries</th></tr>");
-  for (uint32 i = 0, cnt = (g_parmHistorySize > WEB_PARM_HISTORY) ? WEB_PARM_HISTORY : g_parmHistorySize; i != cnt; ++i)
-  {
+  for (uint32 i = 0, cnt = (g_parmHistorySize > WEB_PARM_HISTORY) ? WEB_PARM_HISTORY : g_parmHistorySize; i != cnt; ++i) {
     const ParmHistData& parmData = g_parmHistory[(g_parmHistorySize - i - 1) % MAX_PARM_HISTORY];
 
     char stateBuf[20];
@@ -977,8 +864,7 @@ void webHandleRoot()
   g_webServer.send(200, "text/html", resp);
 }
 
-void webHandleRequestData()
-{
+void webHandleRequestData() {
   g_requestData = true;
   
   String resp;
@@ -990,8 +876,7 @@ void webHandleRequestData()
   g_webServer.send(302, "text/html", resp);
 }
 
-void webHandleDiag()
-{
+void webHandleDiag() {
   uint32 byteCount = g_serialByteCount;
   uint32 byteStart = (byteCount < WEB_DIAG_DATA_SIZE) ? 0 : ((byteCount - WEB_DIAG_DATA_SIZE) & ~(0x20-1));
 
@@ -1013,15 +898,13 @@ void webHandleDiag()
   resp.concat(g_recvErrCnt);
 
   resp.concat("<hr>Last EBus data:<div style=\"font-family: monospace;\">");
-  while (byteStart < byteCount)
-  {
+  while (byteStart < byteCount) {
     uint32 portion = byteCount - byteStart;
     if (portion > 32)
       portion = 32;
     sprintf(tbuf, "%08X:", byteStart);
     resp.concat(tbuf);
-    for (uint32 i = 0; i < portion; ++i)
-    {
+    for (uint32 i = 0; i < portion; ++i) {
       uint8 ch = GET_SERIAL_BYTE_NO(byteStart+i);
       sprintf(tbuf, "%s%02X", ((i & 0x0F) == 0 ? "&nbsp;&nbsp;" : "&nbsp;"),  ch);
       resp.concat(tbuf);
@@ -1034,8 +917,7 @@ void webHandleDiag()
   if (g_failedCommandCount < failedCmdCnt)
     failedCmdCnt = g_failedCommandCount;
 
-  for (uint32 n = 0; n < failedCmdCnt; ++n)
-  {
+  for (uint32 n = 0; n < failedCmdCnt; ++n) {
     uint32 cmdIdx = (g_failedCommandCount - n - 1) % FAILED_COMMAND_HISTORY_SIZE;
     const ParmHistData& cmd = g_lastFailedCommands[cmdIdx];
     const uint8 *cmdBytes = g_failedCommandBytes + cmdIdx * FAILED_COMMAND_BYTES_MAX;
@@ -1050,15 +932,13 @@ void webHandleDiag()
     resp.concat(buf);
     resp.concat("<div style=\"font-family: monospace;\">");
     uint32 bc = 0;
-    while (bc < cmd.m_savedBytes)
-    {
+    while (bc < cmd.m_savedBytes) {
       uint32 portion = cmd.m_savedBytes - bc;
       if (portion > 32)
         portion = 32;
       sprintf(tbuf, "%08X:", bc);
       resp.concat(tbuf);
-      for (uint32 i = 0; i < portion; ++i)
-      {
+      for (uint32 i = 0; i < portion; ++i) {
         uint8 ch = cmdBytes[bc + i];
         sprintf(tbuf, "%s%02X", ((i & 0x0F) == 0 ? "&nbsp;&nbsp;" : "&nbsp;"),  ch);
         resp.concat(tbuf);
@@ -1075,8 +955,7 @@ void webHandleDiag()
   g_webServer.send(200, "text/html", resp);
 }
 
-void webHandleNotFound()
-{
+void webHandleNotFound() {
   String message = "404 Not Found\n\n";
   message += "URI: ";
   message += g_webServer.uri();
@@ -1085,14 +964,13 @@ void webHandleNotFound()
   message += "\nArguments: ";
   message += g_webServer.args();
   message += "\n";
-  for (uint8_t i=0; i<g_webServer.args(); i++){
+  for (uint8_t i=0; i<g_webServer.args(); i++) {
     message += " " + g_webServer.argName(i) + ": " + g_webServer.arg(i) + "\n";
   }
   g_webServer.send(404, "text/plain", message);
 }
 
-void SetupWebServer()
-{
+void SetupWebServer() {
   g_webServer.on("/", webHandleRoot);
   g_webServer.on("/request-data", webHandleRequestData);
   g_webServer.on("/diag", webHandleDiag);
@@ -1100,22 +978,19 @@ void SetupWebServer()
   g_webServer.begin();
 }
 
-void ProcessWebServer()
-{
+void ProcessWebServer() {
   g_webServer.handleClient();
 }
 
 /////////////////////////////////////////////////////////////
 // Sending data to narodmon.ru
 
-enum
-{
+enum {
   NarodMonMinDelay = CONFIG_NARODMON_START_DELAY*1000,   // Delay before first send after startup
   NarodMonInterval = CONFIG_NARODMON_SEND_INTERVAL*1000  // Regular data sending interval
 };
 
-void ProcessNarodmon()
-{
+void ProcessNarodmon() {
 #if CONFIG_NARODMON_ENABLE
 
   if (g_syncOk && g_lastResultSent)
@@ -1124,13 +999,10 @@ void ProcessNarodmon()
   uint32 t = millis();
 
   // first time interval
-  if (g_lastNarodMonTime == 0)
-  {
+  if (g_lastNarodMonTime == 0) {
     if (t < NarodMonMinDelay)
       return;
-  }
-  else
-  {
+  } else {
     if ((t - g_lastNarodMonTime) < NarodMonInterval)
       return;
   }
@@ -1140,17 +1012,14 @@ void ProcessNarodmon()
     return;
 
   char databuf[200];
-  if (g_syncOk && g_lastResultValid)
-  {
+  if (g_syncOk && g_lastResultValid) {
     // send state, temperature and pressure
     sprintf(databuf, "#%s\n#S1#%d\n#T1#%d.%02u\n#P1#%d.%02u\n##\n",
       CONFIG_NARODMON_DEVICE_ID, g_lastState,
       g_lastTempValue/16, (g_lastTempValue & 0xF)*100/16,
       g_lastPressValue/1000, (g_lastPressValue % 1000)/10
     );
-  }
-  else
-  {
+  } else {
     // send only state (255 if EBus is not available)
     const uint32 state = g_syncOk ? g_lastState : 255;
     sprintf(databuf, "#%s\n#S1#%d\n##\n",
@@ -1170,8 +1039,7 @@ void ProcessNarodmon()
 /////////////////////////////////////////////////////////////
 // main
 
-void setup()
-{
+void setup() {
   Serial.begin(2400);
 
   SetupIndication();
@@ -1181,8 +1049,7 @@ void setup()
   SetupMonitor();
 }
 
-void loop()
-{
+void loop() {
   ProcessMonitor();
   ProcessIndication();
   ProcessNarodmon();
