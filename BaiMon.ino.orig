@@ -280,14 +280,7 @@ bool ICACHE_RAM_ATTR RetryOrFail(volatile EBusCommand *cmd)
 // Send byte to EBus
 void ICACHE_RAM_ATTR SendChar(uint8 ch)
 {
-  while((USS(UART_EBUS) >> USTXC) >= 0x7f);
-  USF(UART_EBUS) = ch;
-  //WRITE_PERI_REG(UART_FIFO(UART_EBUS), ch);
-  
-  // Rom SDK function
-	// uart_tx_one_char(ch);
-	// Flush
-	// uart_wait_tx_empty(UART_EBUS);
+  WRITE_PERI_REG(UART_FIFO(UART_EBUS), ch);
 }
 
 void ICACHE_RAM_ATTR ProcessReceive(int st)
@@ -470,44 +463,70 @@ void ICACHE_RAM_ATTR ProcessReceive(int st)
 
 void ICACHE_RAM_ATTR uart_int_handler(void *va)
 {
-    uint8 RcvChar;
+  for (;;)
+  {
+    const uint32 uartIntStatus = READ_PERI_REG(UART_INT_ST(UART_EBUS));
+    if (uartIntStatus == 0)
+      break;
 
-    if (UART_RXFIFO_FULL_INT_ST != (READ_PERI_REG(UART_INT_ST(UART_EBUS)) & UART_RXFIFO_FULL_INT_ST)) {
-        return;
+    if (CHECK_INT_STATUS(uartIntStatus, UART_FRM_ERR_INT_ST))
+    {
+      ProcessReceive(RecvError);     
+      WRITE_PERI_REG(UART_INT_CLR(UART_EBUS), UART_FRM_ERR_INT_CLR); 
     }
-
-    WRITE_PERI_REG(UART_INT_CLR(UART_EBUS), UART_RXFIFO_FULL_INT_CLR);
-
-    while (READ_PERI_REG(UART_STATUS(UART_EBUS)) & (UART_RXFIFO_CNT << UART_RXFIFO_CNT_S)) {
-        RcvChar = READ_PERI_REG(UART_FIFO(UART_EBUS)) & 0xFF;
-		ProcessReceive(RcvChar);
-	}
+    else if (CHECK_INT_STATUS(uartIntStatus, UART_BRK_DET_INT_ST))
+    {
+      ProcessReceive(RecvError);     
+      WRITE_PERI_REG(UART_INT_CLR(UART_EBUS), UART_BRK_DET_INT_CLR); 
+    }
+    else if (CHECK_INT_STATUS(uartIntStatus, UART_RXFIFO_FULL_INT_ST))
+    {
+      const uint32 fifoLen = (READ_PERI_REG(UART_STATUS(UART_EBUS)) >> UART_RXFIFO_CNT_S) & UART_RXFIFO_CNT;
+      for (uint32 i = 0; i < fifoLen; ++i)
+      {
+        const uint8 ch = READ_PERI_REG(UART_FIFO(UART_EBUS));
+        ProcessReceive(ch);
+      }
+      WRITE_PERI_REG(UART_INT_CLR(UART_EBUS), UART_RXFIFO_FULL_INT_CLR); 
+    }
+    else if (CHECK_INT_STATUS(uartIntStatus, UART_RXFIFO_TOUT_INT_ST))
+    {
+      const uint32 fifoLen = (READ_PERI_REG(UART_STATUS(UART_EBUS)) >> UART_RXFIFO_CNT_S) & UART_RXFIFO_CNT;
+      for (uint32 i = 0; i < fifoLen; ++i)
+      {
+        const uint8 ch = READ_PERI_REG(UART_FIFO(UART_EBUS));
+        ProcessReceive(ch);
+      }
+      ProcessReceive(RecvTimeout);
+      WRITE_PERI_REG(UART_INT_CLR(UART_EBUS), UART_RXFIFO_TOUT_INT_CLR); 
+    }
+    else if (CHECK_INT_STATUS(uartIntStatus, UART_TXFIFO_EMPTY_INT_ST))
+    {
+      WRITE_PERI_REG(UART_INT_CLR(UART_EBUS), UART_TXFIFO_EMPTY_INT_CLR);
+    }
+    else
+    {
+      ProcessReceive(RecvUnknown);
+    }
+  }
 }
 
 void SetupEBus()
 {
-    ETS_UART_INTR_ATTACH(uart_int_handler,  NULL);
-    PIN_PULLUP_DIS(PERIPHS_IO_MUX_U0TXD_U);
-    PIN_FUNC_SELECT(PERIPHS_IO_MUX_U0TXD_U, FUNC_U0TXD);
+  Serial.begin(2400);
 
-    uart_div_modify(UART_EBUS, UART_CLK_FREQ / 2400);
-    WRITE_PERI_REG(UART_CONF0(UART_EBUS), UART_8N1);
+  // Purge receive buffer
+  while(Serial.available())
+    Serial.read();
 
-    //clear rx and tx fifo,not ready
-    SET_PERI_REG_MASK(UART_CONF0(UART_EBUS), UART_RXFIFO_RST | UART_TXFIFO_RST);
-    CLEAR_PERI_REG_MASK(UART_CONF0(UART_EBUS), UART_RXFIFO_RST | UART_TXFIFO_RST);
+  // UART CONF1 (other config bits are set to 0)
+  const uint32 conf1 = (1 << UART_RXFIFO_FULL_THRHD_S); // | (0x78 << UART_RX_TOUT_THRHD_S) | UART_RX_TOUT_EN;
 
-    //set rx fifo trigger = 1 byte
-    WRITE_PERI_REG(UART_CONF1(UART_EBUS), (1 & UART_RXFIFO_FULL_THRHD) << UART_RXFIFO_FULL_THRHD_S);
+  WRITE_PERI_REG(UART_CONF1(UART0), conf1);
+  ETS_UART_INTR_ATTACH(uart_int_handler, 0);
 
-    //clear all interrupt
-    WRITE_PERI_REG(UART_INT_CLR(UART_EBUS), 0xffff);
-    //enable rx_interrupt
-    SET_PERI_REG_MASK(UART_INT_ENA(UART_EBUS), UART_RXFIFO_FULL_INT_ENA);
-
-
-  	//WRITE_PERI_REG(UART_INT_ENA(UART_EBUS), UART_RXFIFO_FULL_INT_ENA|UART_FRM_ERR_INT_ENA|UART_BRK_DET_INT_ENA);
-  	//ETS_UART_INTR_ENABLE();
+  WRITE_PERI_REG(UART_INT_ENA(UART0), UART_RXFIFO_FULL_INT_ENA|UART_FRM_ERR_INT_ENA|UART_BRK_DET_INT_ENA);
+  ETS_UART_INTR_ENABLE();
 }
 
 /////////////////////////////////////////////////////////////
